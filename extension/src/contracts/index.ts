@@ -81,9 +81,38 @@ export interface ScanRequest {
   readonly authorizationConfirmed: boolean;
   readonly mode: ScanMode;
   readonly activeVerificationConfirmed: boolean;
+  readonly labExploitationConfirmed: boolean;
+  readonly labProfile?: LabScanProfile | null;
 }
 
-export type ScanMode = 'baseline' | 'active-verification';
+export type ScanMode = 'baseline' | 'active-verification' | 'lab-exploitation';
+
+export interface LabScanProfile {
+  readonly xssPath: string;
+  readonly xssParameter: string;
+  readonly sqlPath: string;
+  readonly sqlParameter: string;
+  readonly sqlBaselineValue: string;
+  readonly commandPath: string;
+  readonly commandParameter: string;
+  readonly ssrfPath: string;
+  readonly ssrfParameter: string;
+  readonly ssrfCanaryUrl: string;
+  readonly ssrfExpectedMarker: string;
+  readonly traversalPath: string;
+  readonly traversalParameter: string;
+  readonly traversalPayload: string;
+  readonly traversalExpectedMarker: string;
+  readonly uploadPath: string;
+  readonly uploadFieldName: string;
+  readonly uploadRetrievalPathTemplate: string;
+  readonly idorPathTemplate: string;
+  readonly idorOwnResourceId: string;
+  readonly idorOtherResourceId: string;
+  readonly accountAToken: string;
+  readonly accountBToken: string;
+  readonly requestsPerSecond: number;
+}
 
 export interface ScanSummary {
   readonly totalChecks: number;
