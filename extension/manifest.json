@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Authorized Web Security Assessment",
+  "description": "Local-first authorized defensive web security assessment.",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "Authorized Security Assessment",
+    "default_popup": "popup.html"
+  },
+  "host_permissions": [
+    "http://127.0.0.1:17854/*",
+    "http://localhost:17854/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
+

@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localhost/contracts/authorized-security-agent/protocol-1.0.schema.json",
+  "title": "Authorized Security Agent Protocol",
+  "description": "Language-neutral wire contracts for the browser extension and loopback agent.",
+  "type": "object",
+  "$defs": {
+    "contractVersion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "commandType": {
+      "type": "string",
+      "enum": [
+        "start-scan",
+        "stop-scan",
+        "pause-scan",
+        "resume-scan"
+      ]
+    },
+    "commandEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "commandId",
+        "commandType",
+        "payload"
+      ],
+      "properties": {
+        "contractVersion": {
+          "$ref": "#/$defs/contractVersion"
+        },
+        "commandId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "commandType": {
+          "$ref": "#/$defs/commandType"
+        },
+        "payload": {
+          "type": "object"
+        }
+      }
+    },
+    "scanEventType": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "started",
+        "progress",
+        "paused",
+        "completed",
+        "failed",
+        "stopped"
+      ]
+    },
+    "scanEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "eventId",
+        "scanId",
+        "eventType",
+        "occurredAt"
+      ],
+      "properties": {
+        "contractVersion": {
+          "$ref": "#/$defs/contractVersion"
+        },
+        "eventId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "scanId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "eventType": {
+          "$ref": "#/$defs/scanEventType"
+        },
+        "occurredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500
+        },
+        "progressPercent": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "findingStatus": {
+      "type": "string",
+      "enum": [
+        "open",
+        "accepted-risk",
+        "false-positive",
+        "resolved"
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "id",
+        "scanId",
+        "ruleId",
+        "title",
+        "category",
+        "severity",
+        "confidence",
+        "affectedUrl",
+        "evidence",
+        "riskDescription",
+        "remediation",
+        "references",
+        "status",
+        "firstDetectedAt",
+        "lastDetectedAt"
+      ],
+      "properties": {
+        "contractVersion": {
+          "$ref": "#/$defs/contractVersion"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "scanId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ruleId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        },
+        "affectedUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "affectedParameter": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 200
+        },
+        "evidence": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "riskDescription": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "remediation": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "uniqueItems": true
+        },
+        "status": {
+          "$ref": "#/$defs/findingStatus"
+        },
+        "firstDetectedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastDetectedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "errorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "errorCode",
+        "message",
+        "traceId"
+      ],
+      "properties": {
+        "contractVersion": {
+          "$ref": "#/$defs/contractVersion"
+        },
+        "errorCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "traceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "errors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 500
+            }
+          }
+        }
+      }
+    }
+  }
+}

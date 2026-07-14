@@ -1,0 +1,22 @@
+# JavaScript
+node_modules/
+extension/dist/
+*.tsbuildinfo
+
+# .NET
+**/bin/
+**/obj/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.vs/
+.DS_Store
+Thumbs.db
+
+# Local environment overrides and runtime data
+.env.local
+.env.*.local
+data/
+logs/
+
