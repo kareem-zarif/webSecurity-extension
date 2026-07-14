@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentHealthResponse, Finding, ScanReport, Severity } from '../contracts';
+import type { AgentHealthResponse, Finding, ScanMode, ScanReport, Severity } from '../contracts';
 import { AgentClient, AgentConnectionError } from '../core/agent-client';
 import { loadExtensionConfig } from '../core/config';
 
@@ -20,6 +20,8 @@ export function App() {
   const [connection, setConnection] = useState<ConnectionState>({ kind: 'loading' });
   const [targetOrigin, setTargetOrigin] = useState('');
   const [authorizationConfirmed, setAuthorizationConfirmed] = useState(false);
+  const [mode, setMode] = useState<ScanMode>('active-verification');
+  const [activeVerificationConfirmed, setActiveVerificationConfirmed] = useState(false);
   const [scan, setScan] = useState<ScanState>({ kind: 'idle' });
   const healthController = useRef<AbortController | null>(null);
   const scanController = useRef<AbortController | null>(null);
@@ -56,6 +58,7 @@ export function App() {
     if (currentOrigin !== undefined) {
       setTargetOrigin(currentOrigin);
       setAuthorizationConfirmed(false);
+      setActiveVerificationConfirmed(false);
       setScan({ kind: 'idle' });
     }
   }, []);
@@ -74,6 +77,7 @@ export function App() {
   const canScan = connection.kind === 'available' &&
     normalizedTarget !== undefined &&
     authorizationConfirmed &&
+    (mode === 'baseline' || activeVerificationConfirmed) &&
     scan.kind !== 'running';
 
   const runScan = async () => {
@@ -84,6 +88,11 @@ export function App() {
 
     if (normalizedTarget === undefined) {
       setScan({ kind: 'error', message: 'Enter a valid HTTP or HTTPS website origin.' });
+      return;
+    }
+
+    if (mode === 'active-verification' && !activeVerificationConfirmed) {
+      setScan({ kind: 'error', message: 'Confirm the separate active-verification authorization before starting.' });
       return;
     }
 
@@ -98,7 +107,12 @@ export function App() {
     setScan({ kind: 'running' });
 
     try {
-      const report = await new AgentClient(loadExtensionConfig()).runScan(normalizedTarget, controller.signal);
+      const report = await new AgentClient(loadExtensionConfig()).runScan(
+        normalizedTarget,
+        mode,
+        activeVerificationConfirmed,
+        controller.signal,
+      );
       if (!controller.signal.aborted) {
         setScan({ kind: 'complete', report });
       }
@@ -133,7 +147,7 @@ export function App() {
             <p className="step-label">Assessment target</p>
             <h2 id="assessment-title">Test an authorized website</h2>
           </div>
-          <span className="coverage-badge">12 checks</span>
+          <span className="coverage-badge">{mode === 'active-verification' ? '18 checks' : '12 checks'}</span>
         </div>
 
         <label className="field-label" htmlFor="target-origin">Exact website origin</label>
@@ -147,6 +161,7 @@ export function App() {
             onChange={event => {
               setTargetOrigin(event.target.value);
               setAuthorizationConfirmed(false);
+              setActiveVerificationConfirmed(false);
               setScan({ kind: 'idle' });
             }}
           />
@@ -157,6 +172,20 @@ export function App() {
         {targetOrigin.length > 0 && normalizedTarget === undefined && (
           <p className="field-error">Use an HTTP(S) origin without a path, query, credentials, or fragment.</p>
         )}
+
+        <label className="field-label mode-label" htmlFor="assessment-mode">Assessment depth</label>
+        <select
+          id="assessment-mode"
+          value={mode}
+          onChange={event => {
+            setMode(event.target.value as ScanMode);
+            setActiveVerificationConfirmed(false);
+            setScan({ kind: 'idle' });
+          }}
+        >
+          <option value="active-verification">Active verification — controlled proof requests</option>
+          <option value="baseline">Baseline — inspect one public response</option>
+        </select>
 
         <label className="authorization-check">
           <input
@@ -169,20 +198,40 @@ export function App() {
           </span>
         </label>
 
+        {mode === 'active-verification' && (
+          <label className="authorization-check authorization-check--active">
+            <input
+              type="checkbox"
+              checked={activeVerificationConfirmed}
+              onChange={event => setActiveVerificationConfirmed(event.target.checked)}
+            />
+            <span>
+              I also authorize up to eight rate-limited, non-destructive proof requests against <strong>{targetHost}</strong>.
+            </span>
+          </label>
+        )}
+
         <details className="coverage-details">
           <summary>What this assessment checks</summary>
           <p>
             HTTPS and HSTS, CSP, clickjacking, MIME sniffing, referrer and permissions policies,
             cookie flags, CORS, technology disclosure, mixed content, insecure forms, and script integrity.
           </p>
-          <p>
-            It sends one unauthenticated GET request and follows only same-origin redirects. It does not use
-            browser cookies, exploit payloads, credential attacks, brute force, persistence, or denial of service.
-          </p>
+          {mode === 'active-verification' ? (
+            <p>
+              Active mode also checks arbitrary CORS trust, TRACE exposure, harmless HTML reflection,
+              database-error behavior from a single-quote canary, and open redirects. It never follows the external redirect probe.
+            </p>
+          ) : (
+            <p>Baseline mode sends one unauthenticated GET request and follows only same-origin redirects.</p>
+          )}
+          <p>No browser cookies, credentials, script execution, data extraction, brute force, destructive requests, persistence, or denial of service are used.</p>
         </details>
 
         <button className="primary-button" type="button" onClick={() => void runScan()} disabled={!canScan}>
-          {scan.kind === 'running' ? 'Assessing safely…' : 'Run authorized assessment'}
+          {scan.kind === 'running'
+            ? 'Running controlled checks…'
+            : mode === 'active-verification' ? 'Run active verification' : 'Run baseline assessment'}
         </button>
 
         {scan.kind === 'error' && (
@@ -238,6 +287,10 @@ function AssessmentReport({ report }: { readonly report: ScanReport }) {
         <span className="report-time">{formatTimestamp(report.completedAt)}</span>
       </div>
 
+      <p className="report-meta">
+        {report.mode === 'active-verification' ? 'Active verification' : 'Baseline'} · {report.summary.totalChecks} checks · {report.summary.requestsSent} HTTP request{report.summary.requestsSent === 1 ? '' : 's'}
+      </p>
+
       <div className="severity-summary" aria-label="Finding counts by severity">
         {severityOrder.map(severity => (
           <div className={`severity-count severity-count--${severity}`} key={severity}>
@@ -286,6 +339,8 @@ function FindingDetails({ finding }: { readonly finding: Finding }) {
           <div><dt>Category</dt><dd>{finding.category}</dd></div>
           <div><dt>Confidence</dt><dd>{capitalize(finding.confidence)}</dd></div>
         </dl>
+        <h3>How it was tested</h3>
+        <p>{finding.testMethod}</p>
         <h3>Evidence</h3>
         <p>{finding.evidence}</p>
         <h3>Why it matters</h3>
@@ -382,6 +437,7 @@ function downloadHtmlReport(report: ScanReport): void {
     <section class="finding ${escapeHtml(finding.severity)}">
       <p class="severity">${escapeHtml(finding.severity.toUpperCase())} · ${escapeHtml(finding.category)}</p>
       <h2>${escapeHtml(finding.title)}</h2>
+      <h3>How it was tested</h3><p>${escapeHtml(finding.testMethod)}</p>
       <h3>Evidence</h3><p>${escapeHtml(finding.evidence)}</p>
       <h3>Risk</h3><p>${escapeHtml(finding.riskDescription)}</p>
       <h3>Recommended fix</h3><p>${escapeHtml(finding.remediation)}</p>
@@ -396,7 +452,7 @@ h1{margin-bottom:4px}.meta{color:#5d6966}.summary{display:flex;gap:12px;flex-wra
 .finding.critical,.finding.high{border-left-color:#b73737}.finding.medium{border-left-color:#ba7520}.finding.low{border-left-color:#426f9d}.severity{font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:12px}h2{margin-top:0}h3{margin-bottom:4px;font-size:14px}.scope{margin-top:32px;padding:18px;background:#f1f5f3;border-radius:12px}
 </style></head><body>
 <h1>Authorized Website Security Assessment</h1>
-<p class="meta">Target: ${escapeHtml(report.targetUrl)} · Completed: ${escapeHtml(new Date(report.completedAt).toLocaleString())} · Scan: ${escapeHtml(report.scanId)}</p>
+<p class="meta">Target: ${escapeHtml(report.targetUrl)} · Mode: ${escapeHtml(report.mode)} · Requests: ${report.summary.requestsSent} · Completed: ${escapeHtml(new Date(report.completedAt).toLocaleString())} · Scan: ${escapeHtml(report.scanId)}</p>
 <div class="summary"><span><strong>${report.summary.totalFindings}</strong> findings</span><span><strong>${report.summary.high}</strong> high</span><span><strong>${report.summary.medium}</strong> medium</span><span><strong>${report.summary.low}</strong> low</span><span><strong>${report.summary.informational}</strong> info</span></div>
 ${findings || '<section class="finding"><h2>No issues detected by the automated checks</h2><p>This result does not prove the application is vulnerability-free.</p></section>'}
 <section class="scope"><h2>Scope</h2><p>${escapeHtml(report.scopeNote)}</p><p>Automated results require manual validation before client delivery.</p></section>

@@ -10,6 +10,7 @@ public sealed record Finding(
     Confidence Confidence,
     Uri AffectedUrl,
     string? AffectedParameter,
+    string TestMethod,
     string Evidence,
     string RiskDescription,
     string Remediation,
@@ -42,4 +43,3 @@ public enum FindingStatus
     FalsePositive,
     Resolved
 }
-

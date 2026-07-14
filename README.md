@@ -1,6 +1,6 @@
 # Authorized Web Security Assessment Extension
 
-This repository contains a local-first browser extension and security agent for authorized defensive web assessment. The current MVP provides an explicit authorization workflow, a bounded unauthenticated website assessment, severity-ranked findings, remediation guidance, and JSON/HTML report export.
+This repository contains a local-first browser extension and security agent for authorized defensive web assessment. The current MVP provides baseline inspection and separately authorized active verification, severity-ranked findings, reproducible test methods, remediation guidance, and JSON/HTML report export.
 
 ## Safety boundary
 
@@ -57,11 +57,16 @@ Then open the browser's extensions page, enable developer mode, choose **Load un
 
 1. Open the website you own or have explicit written permission to assess.
 2. Open the extension and confirm the exact origin shown in the target field.
-3. Confirm authorization, then choose **Run authorized assessment**.
-4. Expand each finding to review its evidence, impact, and recommended remediation.
-5. Export JSON for structured processing or **Client report** for a standalone HTML report.
+3. Choose **Baseline** or **Active verification** from the assessment-depth dropdown.
+4. Confirm target authorization. Active mode also requires its separate proof-request confirmation.
+5. Run the assessment and expand each finding to review how it was tested, its evidence, impact, and recommended remediation.
+6. Export JSON for structured processing or **Client report** for a standalone HTML report.
 
-The scanner sends one unauthenticated GET request and follows only same-origin redirects. It checks HTTPS/HSTS, CSP, framing, MIME sniffing, referrer and permissions policies, cookie attributes, CORS, technology disclosure, mixed content, insecure forms, and external-script integrity. It does not use browser credentials or cookies and does not perform payload exploitation, brute force, credential attacks, persistence, stealth, or denial-of-service testing. Automated findings require manual validation.
+Baseline mode sends one unauthenticated GET request and follows only same-origin redirects. It checks HTTPS/HSTS, CSP, framing, MIME sniffing, referrer and permissions policies, cookie attributes, CORS, technology disclosure, mixed content, insecure forms, and external-script integrity.
+
+Active-verification mode adds up to eight rate-limited proof requests. It checks arbitrary CORS-origin reflection, unsafe cross-origin method authorization, TRACE exposure, exact reflection of a harmless non-executable HTML canary, new database-error signatures caused by a single quote, and common open-redirect parameters. Redirect probes are never followed. The report records the exact bounded method used for each result.
+
+Neither mode uses browser credentials or cookies. Active verification does not execute scripts, extract database or application data, submit destructive methods, brute-force credentials, create persistence, use stealth, or perform denial of service. Automated findings require manual validation.
 
 ## Configuration
 

@@ -49,6 +49,7 @@ export interface Finding {
   readonly confidence: Confidence;
   readonly affectedUrl: string;
   readonly affectedParameter?: string | null;
+  readonly testMethod: string;
   readonly evidence: string;
   readonly riskDescription: string;
   readonly remediation: string;
@@ -78,10 +79,15 @@ export interface ScanRequest {
   readonly targetUrl: string;
   readonly authorizedOrigin: string;
   readonly authorizationConfirmed: boolean;
+  readonly mode: ScanMode;
+  readonly activeVerificationConfirmed: boolean;
 }
+
+export type ScanMode = 'baseline' | 'active-verification';
 
 export interface ScanSummary {
   readonly totalChecks: number;
+  readonly requestsSent: number;
   readonly totalFindings: number;
   readonly critical: number;
   readonly high: number;
@@ -94,6 +100,7 @@ export interface ScanReport {
   readonly contractVersion: ContractVersion;
   readonly scanId: string;
   readonly targetUrl: string;
+  readonly mode: ScanMode;
   readonly startedAt: string;
   readonly completedAt: string;
   readonly summary: ScanSummary;

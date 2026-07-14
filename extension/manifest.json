@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Authorized Web Security Assessment",
   "description": "Local-first authorized defensive web security assessment.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "action": {
     "default_title": "Authorized Security Assessment",
     "default_popup": "popup.html"

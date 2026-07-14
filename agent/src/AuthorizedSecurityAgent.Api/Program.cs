@@ -90,7 +90,7 @@ app.UseStatusCodePages(async statusCodeContext =>
 app.MapGet("/health", (HttpContext context) =>
     {
         context.Response.Headers.CacheControl = "no-store";
-        var assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.2.0";
+        var assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.3.0";
 
         return TypedResults.Ok(new AgentHealthResponse(
             Status: "healthy",

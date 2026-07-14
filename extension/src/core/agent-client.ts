@@ -3,6 +3,7 @@ import {
   type AgentHealthResponse,
   type ErrorResponse,
   type Finding,
+  type ScanMode,
   type ScanReport,
   type ScanSummary,
 } from '../contracts';
@@ -65,7 +66,12 @@ export class AgentClient {
     return payload;
   }
 
-  public async runScan(targetOrigin: string, signal?: AbortSignal): Promise<ScanReport> {
+  public async runScan(
+    targetOrigin: string,
+    mode: ScanMode,
+    activeVerificationConfirmed: boolean,
+    signal?: AbortSignal,
+  ): Promise<ScanReport> {
     const timeoutSignal = AbortSignal.timeout(30_000);
     const requestSignal = signal === undefined
       ? timeoutSignal
@@ -84,6 +90,8 @@ export class AgentClient {
           targetUrl: targetOrigin,
           authorizedOrigin: targetOrigin,
           authorizationConfirmed: true,
+          mode,
+          activeVerificationConfirmed,
         }),
         cache: 'no-store',
         credentials: 'omit',
@@ -150,6 +158,7 @@ function isScanReport(value: unknown): value is ScanReport {
     value.contractVersion === CONTRACT_VERSION &&
     typeof value.scanId === 'string' &&
     typeof value.targetUrl === 'string' &&
+    (value.mode === 'baseline' || value.mode === 'active-verification') &&
     typeof value.startedAt === 'string' &&
     typeof value.completedAt === 'string' &&
     typeof value.scopeNote === 'string' &&
@@ -162,7 +171,7 @@ function isScanReport(value: unknown): value is ScanReport {
 
 function isScanSummary(value: unknown): value is ScanSummary {
   return isObject(value) &&
-    ['totalChecks', 'totalFindings', 'critical', 'high', 'medium', 'low', 'informational']
+    ['totalChecks', 'requestsSent', 'totalFindings', 'critical', 'high', 'medium', 'low', 'informational']
       .every(key => typeof value[key] === 'number');
 }
 
@@ -177,6 +186,7 @@ function isFinding(value: unknown): value is Finding {
     isSeverity(value.severity) &&
     isConfidence(value.confidence) &&
     typeof value.affectedUrl === 'string' &&
+    typeof value.testMethod === 'string' &&
     typeof value.evidence === 'string' &&
     typeof value.riskDescription === 'string' &&
     typeof value.remediation === 'string' &&

@@ -3,6 +3,7 @@ namespace AuthorizedSecurityAgent.Application.Contracts;
 public sealed record ScanReport(
     Guid ScanId,
     Uri TargetUrl,
+    ScanMode Mode,
     DateTimeOffset StartedAt,
     DateTimeOffset CompletedAt,
     ScanSummary Summary,
@@ -13,6 +14,7 @@ public sealed record ScanReport(
 
 public sealed record ScanSummary(
     int TotalChecks,
+    int RequestsSent,
     int TotalFindings,
     int Critical,
     int High,

@@ -11,6 +11,8 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
 {
     private const int MaximumResponseBytes = 1_000_000;
     private const int MaximumRedirects = 5;
+    private const int ProbeDelayMilliseconds = 200;
+    private const string ProbeOrigin = "https://security-probe.invalid";
 
     private static readonly IReadOnlyList<string> ChecksPerformed =
     [
@@ -26,6 +28,16 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
         "Mixed active and passive content",
         "Insecure form submission",
         "External script integrity metadata"
+    ];
+
+    private static readonly IReadOnlyList<string> ActiveChecksPerformed =
+    [
+        "Arbitrary CORS-origin reflection",
+        "Cross-origin method authorization",
+        "HTTP TRACE exposure",
+        "Unencoded HTML reflection canary",
+        "Database error response to an injection canary",
+        "Open redirect parameters"
     ];
 
     private static readonly Uri OwaspHeadersReference =
@@ -61,9 +73,11 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
         var startedAt = DateTimeOffset.UtcNow;
         var findings = new List<Finding>();
 
-        using var response = await GetTargetAsync(target, cancellationToken);
+        var targetFetch = await GetTargetAsync(target, cancellationToken);
+        using var response = targetFetch.Response;
         var assessedUrl = response.RequestMessage?.RequestUri ?? target;
         var detectedAt = DateTimeOffset.UtcNow;
+        string? baselineBody = null;
 
         EvaluateTransport(assessedUrl, scanId, detectedAt, findings);
         EvaluateHeaders(response, assessedUrl, scanId, detectedAt, findings);
@@ -71,9 +85,24 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
 
         if (IsHtml(response.Content.Headers.ContentType))
         {
-            var html = await ReadLimitedBodyAsync(response.Content, cancellationToken);
-            EvaluateHtml(html, assessedUrl, scanId, detectedAt, findings);
+            baselineBody = await ReadLimitedBodyAsync(response.Content, cancellationToken);
+            EvaluateHtml(baselineBody, assessedUrl, scanId, detectedAt, findings);
         }
+
+        var requestsSent = targetFetch.RequestsSent;
+        if (request.Mode == ScanMode.ActiveVerification)
+        {
+            requestsSent += await RunActiveVerificationAsync(
+                RedactToOrigin(assessedUrl),
+                baselineBody ?? string.Empty,
+                scanId,
+                findings,
+                cancellationToken);
+        }
+
+        var checks = request.Mode == ScanMode.ActiveVerification
+            ? ChecksPerformed.Concat(ActiveChecksPerformed).ToArray()
+            : ChecksPerformed;
 
         findings.Sort(static (left, right) => SeverityRank(right.Severity).CompareTo(SeverityRank(left.Severity)));
         var completedAt = DateTimeOffset.UtcNow;
@@ -81,12 +110,15 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
         return new ScanReport(
             ScanId: scanId,
             TargetUrl: RedactToOrigin(assessedUrl),
+            Mode: request.Mode,
             StartedAt: startedAt,
             CompletedAt: completedAt,
-            Summary: BuildSummary(findings),
-            ChecksPerformed: ChecksPerformed,
+            Summary: BuildSummary(findings, checks.Count, requestsSent),
+            ChecksPerformed: checks,
             Findings: findings,
-            ScopeNote: "Unauthenticated, non-destructive assessment of one explicitly authorized origin. No credentials, browser cookies, payload exploitation, brute force, persistence, or denial-of-service techniques were used.");
+            ScopeNote: request.Mode == ScanMode.ActiveVerification
+                ? "Unauthenticated, rate-limited active verification of one explicitly authorized origin. Harmless canaries and non-mutating HTTP methods were used. No credentials, browser cookies, data extraction, script execution, brute force, persistence, destructive requests, or denial-of-service techniques were used."
+                : "Unauthenticated, non-destructive baseline assessment of one explicitly authorized origin. No credentials, browser cookies, active canaries, brute force, persistence, or denial-of-service techniques were used.");
     }
 
     private async Task<Uri> ValidateRequestAsync(ScanRequest request, CancellationToken cancellationToken)
@@ -99,6 +131,11 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
         if (!request.AuthorizationConfirmed)
         {
             throw new ScanValidationException("Explicit authorization confirmation is required.");
+        }
+
+        if (request.Mode == ScanMode.ActiveVerification && !request.ActiveVerificationConfirmed)
+        {
+            throw new ScanValidationException("Active verification requires a separate explicit confirmation.");
         }
 
         if (!TryParseOrigin(request.TargetUrl, out var target) ||
@@ -116,9 +153,10 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
         return target;
     }
 
-    private async Task<HttpResponseMessage> GetTargetAsync(Uri target, CancellationToken cancellationToken)
+    private async Task<TargetFetch> GetTargetAsync(Uri target, CancellationToken cancellationToken)
     {
         var current = target;
+        var requestsSent = 0;
 
         for (var redirectCount = 0; redirectCount <= MaximumRedirects; redirectCount++)
         {
@@ -130,10 +168,11 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
+            requestsSent++;
 
             if (!IsRedirect(response.StatusCode) || response.Headers.Location is null)
             {
-                return response;
+                return new TargetFetch(response, requestsSent);
             }
 
             var redirect = response.Headers.Location.IsAbsoluteUri
@@ -142,7 +181,7 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
 
             if (!IsSameOrigin(target, redirect))
             {
-                return response;
+                return new TargetFetch(response, requestsSent);
             }
 
             response.Dispose();
@@ -150,6 +189,230 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
         }
 
         throw new ScanValidationException("The target exceeded the safe redirect limit.");
+    }
+
+    private async Task<int> RunActiveVerificationAsync(
+        Uri target,
+        string baselineBody,
+        Guid scanId,
+        ICollection<Finding> findings,
+        CancellationToken cancellationToken)
+    {
+        var detectedAt = DateTimeOffset.UtcNow;
+        var requestsSent = 0;
+
+        var corsGet = await SendProbeAsync(
+            HttpMethod.Get,
+            target,
+            static request => request.Headers.TryAddWithoutValidation("Origin", ProbeOrigin),
+            readBody: false,
+            cancellationToken);
+        requestsSent++;
+
+        var corsOptions = await SendProbeAsync(
+            HttpMethod.Options,
+            target,
+            static request =>
+            {
+                request.Headers.TryAddWithoutValidation("Origin", ProbeOrigin);
+                request.Headers.TryAddWithoutValidation("Access-Control-Request-Method", "DELETE");
+            },
+            readBody: false,
+            cancellationToken);
+        requestsSent++;
+
+        EvaluateActiveCors(corsGet, corsOptions, target, scanId, detectedAt, findings);
+
+        var trace = await SendProbeAsync(
+            new HttpMethod("TRACE"),
+            target,
+            configure: null,
+            readBody: false,
+            cancellationToken);
+        requestsSent++;
+        if ((int)trace.StatusCode is >= 200 and < 300)
+        {
+            findings.Add(CreateFinding(
+                scanId, target, detectedAt, "active-trace-enabled", "HTTP TRACE is enabled",
+                "HTTP Method Security", Severity.Low, Confidence.High,
+                $"A TRACE request returned HTTP {(int)trace.StatusCode}. The response body was not retained.",
+                "TRACE is rarely required and increases unnecessary HTTP-method exposure. Legacy clients may combine it with other weaknesses to disclose request data.",
+                "Disable TRACE at the web server, reverse proxy, and application platform unless there is a documented operational requirement.",
+                OwaspHeadersReference,
+                "Sent one unauthenticated TRACE request without cookies, credentials, or custom sensitive headers. Considered the method enabled only when it returned a 2xx response."));
+        }
+
+        var token = Guid.NewGuid().ToString("N");
+        var htmlCanary = $"<as-probe data-token=\"{token}\">probe</as-probe>";
+        var reflectionProbe = await SendProbeAsync(
+            HttpMethod.Get,
+            BuildProbeUri(target, "as_probe", htmlCanary),
+            configure: null,
+            readBody: true,
+            cancellationToken);
+        requestsSent++;
+        if (reflectionProbe.Body.Contains(htmlCanary, StringComparison.Ordinal))
+        {
+            findings.Add(CreateFinding(
+                scanId, target, detectedAt, "active-unencoded-reflection", "Input is reflected into HTML without encoding",
+                "Input Handling", Severity.Medium, Confidence.Medium,
+                "A harmless custom-element canary supplied in the as_probe query parameter was returned byte-for-byte in the HTML response. The response content was not retained.",
+                "Unencoded reflection can become cross-site scripting when attacker-controlled markup reaches an executable HTML, attribute, URL, or script context.",
+                "Apply context-appropriate output encoding, validate input by expected type, and enforce a restrictive CSP as defense in depth. Manually verify the exact reflection context before assigning final severity.",
+                new Uri("https://owasp.org/www-community/attacks/xss/"),
+                "Sent one GET request with a non-executable <as-probe> custom element in the as_probe query parameter. No event handler or JavaScript was included or executed. Compared the response for an exact unencoded reflection."));
+        }
+
+        var baselineSqlSignature = DetectSqlErrorFamily(baselineBody);
+        var sqlProbe = await SendProbeAsync(
+            HttpMethod.Get,
+            BuildProbeUri(target, "as_probe", "'"),
+            configure: null,
+            readBody: true,
+            cancellationToken);
+        requestsSent++;
+        var probeSqlSignature = DetectSqlErrorFamily(sqlProbe.Body);
+        if (probeSqlSignature is not null && !string.Equals(probeSqlSignature, baselineSqlSignature, StringComparison.Ordinal))
+        {
+            findings.Add(CreateFinding(
+                scanId, target, detectedAt, "active-database-error", "Input triggered a database error signature",
+                "Injection", Severity.High, Confidence.Medium,
+                $"A single-quote canary caused a {probeSqlSignature} error signature that was not present in the baseline response. No database content was extracted or retained.",
+                "A database error caused by untrusted input can indicate unsafe query construction and may expose a SQL injection path.",
+                "Use parameterized queries for every database operation, avoid string-built SQL, return generic production errors, and manually reproduce in a controlled test environment before final client reporting.",
+                new Uri("https://owasp.org/www-community/attacks/SQL_Injection"),
+                "Sent one GET request with a single quote in the as_probe query parameter, then compared only known database-error signatures against the baseline response. Did not use UNION, time-delay, boolean extraction, schema discovery, or data-retrieval payloads."));
+        }
+
+        foreach (var parameter in new[] { "redirect", "next", "returnUrl" })
+        {
+            var redirectDestination = $"{ProbeOrigin}/{token}";
+            var redirectProbe = await SendProbeAsync(
+                HttpMethod.Get,
+                BuildProbeUri(target, parameter, redirectDestination),
+                configure: null,
+                readBody: false,
+                cancellationToken);
+            requestsSent++;
+
+            if (redirectProbe.Location is null ||
+                !Uri.TryCreate(target, redirectProbe.Location, out var location) ||
+                !string.Equals(location.Host, "security-probe.invalid", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            findings.Add(CreateFinding(
+                scanId, target, detectedAt, "active-open-redirect", "Untrusted input controls an external redirect",
+                "Redirect Validation", Severity.Medium, Confidence.High,
+                $"The {parameter} query parameter produced a redirect to the controlled security-probe.invalid origin. The redirect was not followed.",
+                "Open redirects can support phishing, authorization-code leakage, and security-control bypasses by making an attacker destination appear to begin on a trusted domain.",
+                "Allow only local relative paths or validate destinations against a strict server-side allowlist. Reject scheme-relative URLs, encoded bypasses, and userinfo-based URLs.",
+                new Uri("https://owasp.org/www-community/attacks/Unvalidated_Redirects_and_Forwards_Cheat_Sheet"),
+                $"Sent one GET request with {parameter}=https://security-probe.invalid/<random-token>. Automatic redirects were disabled and no request was sent to the external destination."));
+            break;
+        }
+
+        return requestsSent;
+    }
+
+    private static void EvaluateActiveCors(
+        ProbeResult getProbe,
+        ProbeResult optionsProbe,
+        Uri target,
+        Guid scanId,
+        DateTimeOffset detectedAt,
+        ICollection<Finding> findings)
+    {
+        var reflectsProbeOrigin = string.Equals(getProbe.AllowOrigin, ProbeOrigin, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(optionsProbe.AllowOrigin, ProbeOrigin, StringComparison.OrdinalIgnoreCase);
+        if (!reflectsProbeOrigin)
+        {
+            return;
+        }
+
+        var allowsCredentials = string.Equals(getProbe.AllowCredentials, "true", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(optionsProbe.AllowCredentials, "true", StringComparison.OrdinalIgnoreCase);
+        var allowsDelete = optionsProbe.AllowMethods?.Split(',', StringSplitOptions.TrimEntries)
+            .Contains("DELETE", StringComparer.OrdinalIgnoreCase) == true;
+        var severity = allowsCredentials ? Severity.High : Severity.Medium;
+
+        findings.Add(CreateFinding(
+            scanId, target, detectedAt, "active-cors-origin-reflection", "CORS trusts an arbitrary external origin",
+            "Cross-Origin Resource Sharing", severity, Confidence.High,
+            $"The server reflected the controlled Origin {ProbeOrigin}. Credentials allowed: {allowsCredentials}. DELETE advertised by preflight: {allowsDelete}.",
+            "An attacker-controlled website may be able to read cross-origin responses. If credentials are allowed or sensitive unauthenticated data is returned, this can expose protected application information or actions.",
+            "Use a strict server-side allowlist of required origins, never reflect arbitrary Origin values, enable credentials only when necessary, and authorize every endpoint independently of CORS.",
+            new Uri("https://owasp.org/www-community/attacks/CORS_OriginHeaderScrutiny"),
+            "Sent one credential-free GET and one OPTIONS preflight using Origin: https://security-probe.invalid. Checked whether that arbitrary origin was reflected and whether credentials or DELETE were authorized. No DELETE request was sent."));
+    }
+
+    private async Task<ProbeResult> SendProbeAsync(
+        HttpMethod method,
+        Uri target,
+        Action<HttpRequestMessage>? configure,
+        bool readBody,
+        CancellationToken cancellationToken)
+    {
+        await Task.Delay(ProbeDelayMilliseconds, cancellationToken);
+        using var request = new HttpRequestMessage(method, target);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/html"));
+        configure?.Invoke(request);
+
+        using var response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        var body = readBody
+            ? await ReadLimitedBodyAsync(response.Content, cancellationToken)
+            : string.Empty;
+
+        return new ProbeResult(
+            StatusCode: response.StatusCode,
+            Location: response.Headers.Location,
+            Body: body,
+            AllowOrigin: Header(response, "Access-Control-Allow-Origin"),
+            AllowCredentials: Header(response, "Access-Control-Allow-Credentials"),
+            AllowMethods: Header(response, "Access-Control-Allow-Methods"));
+    }
+
+    private static Uri BuildProbeUri(Uri origin, string parameter, string value)
+    {
+        var builder = new UriBuilder(origin)
+        {
+            Query = $"{Uri.EscapeDataString(parameter)}={Uri.EscapeDataString(value)}"
+        };
+        return builder.Uri;
+    }
+
+    private static string? DetectSqlErrorFamily(string body)
+    {
+        if (MySqlErrorRegex().IsMatch(body))
+        {
+            return "MySQL-style";
+        }
+
+        if (PostgreSqlErrorRegex().IsMatch(body))
+        {
+            return "PostgreSQL-style";
+        }
+
+        if (SqlServerErrorRegex().IsMatch(body))
+        {
+            return "SQL Server-style";
+        }
+
+        if (OracleErrorRegex().IsMatch(body))
+        {
+            return "Oracle-style";
+        }
+
+        if (SqliteErrorRegex().IsMatch(body))
+        {
+            return "SQLite-style";
+        }
+
+        return null;
     }
 
     private static void EvaluateTransport(
@@ -424,7 +687,8 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
         string evidence,
         string risk,
         string remediation,
-        Uri reference) =>
+        Uri reference,
+        string? testMethod = null) =>
         new(
             Id: Guid.NewGuid(),
             ScanId: scanId,
@@ -435,6 +699,7 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
             Confidence: confidence,
             AffectedUrl: RedactToOrigin(target),
             AffectedParameter: null,
+            TestMethod: testMethod ?? DefaultTestMethod(ruleId),
             Evidence: evidence,
             RiskDescription: risk,
             Remediation: remediation,
@@ -443,9 +708,34 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
             FirstDetectedAt: detectedAt,
             LastDetectedAt: detectedAt);
 
-    private static ScanSummary BuildSummary(IReadOnlyCollection<Finding> findings) =>
+    private static string DefaultTestMethod(string ruleId)
+    {
+        if (ruleId.StartsWith("header-", StringComparison.Ordinal) ||
+            ruleId.StartsWith("cors-", StringComparison.Ordinal))
+        {
+            return "Sent one unauthenticated GET request without browser cookies or credentials and inspected only the returned HTTP response headers.";
+        }
+
+        if (ruleId.StartsWith("cookie-", StringComparison.Ordinal))
+        {
+            return "Sent one unauthenticated GET request and inspected Set-Cookie attribute names. Cookie names and values were not retained.";
+        }
+
+        if (ruleId.StartsWith("html-", StringComparison.Ordinal))
+        {
+            return "Sent one unauthenticated GET request, read at most 1 MB of public HTML, and checked structural patterns without executing page scripts or retaining page content.";
+        }
+
+        return "Sent one unauthenticated GET request without browser cookies or credentials and evaluated the public response without modifying application data.";
+    }
+
+    private static ScanSummary BuildSummary(
+        IReadOnlyCollection<Finding> findings,
+        int totalChecks,
+        int requestsSent) =>
         new(
-            TotalChecks: ChecksPerformed.Count,
+            TotalChecks: totalChecks,
+            RequestsSent: requestsSent,
             TotalFindings: findings.Count,
             Critical: findings.Count(static finding => finding.Severity == Severity.Critical),
             High: findings.Count(static finding => finding.Severity == Severity.High),
@@ -578,6 +868,16 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
         HttpStatusCode.TemporaryRedirect or
         HttpStatusCode.PermanentRedirect;
 
+    private sealed record TargetFetch(HttpResponseMessage Response, int RequestsSent);
+
+    private sealed record ProbeResult(
+        HttpStatusCode StatusCode,
+        Uri? Location,
+        string Body,
+        string? AllowOrigin,
+        string? AllowCredentials,
+        string? AllowMethods);
+
     [GeneratedRegex(@"(?:^|;)\s*max-age\s*=\s*0(?:\s*;|$)", RegexOptions.IgnoreCase)]
     private static partial Regex HstsDisabledRegex();
 
@@ -613,4 +913,19 @@ internal sealed partial class AuthorizedScanService(HttpClient httpClient)
 
     [GeneratedRegex(@"\bintegrity\s*=", RegexOptions.IgnoreCase)]
     private static partial Regex IntegrityAttributeRegex();
+
+    [GeneratedRegex(@"SQL syntax.*MySQL|mysql_(?:query|fetch)|MySqlException", RegexOptions.IgnoreCase)]
+    private static partial Regex MySqlErrorRegex();
+
+    [GeneratedRegex(@"PostgreSQL.*ERROR|Npgsql\.|org\.postgresql\.util\.PSQLException", RegexOptions.IgnoreCase)]
+    private static partial Regex PostgreSqlErrorRegex();
+
+    [GeneratedRegex(@"Unclosed quotation mark|Microsoft OLE DB Provider for SQL Server|SqlException", RegexOptions.IgnoreCase)]
+    private static partial Regex SqlServerErrorRegex();
+
+    [GeneratedRegex(@"ORA-\d{4,5}|OracleException", RegexOptions.IgnoreCase)]
+    private static partial Regex OracleErrorRegex();
+
+    [GeneratedRegex(@"SQLite(?:3)?::|SQLiteException|sqlite error", RegexOptions.IgnoreCase)]
+    private static partial Regex SqliteErrorRegex();
 }
