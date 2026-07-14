@@ -73,3 +73,31 @@ export interface AgentHealthResponse {
   readonly utcTimestamp: string;
 }
 
+export interface ScanRequest {
+  readonly contractVersion: ContractVersion;
+  readonly targetUrl: string;
+  readonly authorizedOrigin: string;
+  readonly authorizationConfirmed: boolean;
+}
+
+export interface ScanSummary {
+  readonly totalChecks: number;
+  readonly totalFindings: number;
+  readonly critical: number;
+  readonly high: number;
+  readonly medium: number;
+  readonly low: number;
+  readonly informational: number;
+}
+
+export interface ScanReport {
+  readonly contractVersion: ContractVersion;
+  readonly scanId: string;
+  readonly targetUrl: string;
+  readonly startedAt: string;
+  readonly completedAt: string;
+  readonly summary: ScanSummary;
+  readonly checksPerformed: readonly string[];
+  readonly findings: readonly Finding[];
+  readonly scopeNote: string;
+}

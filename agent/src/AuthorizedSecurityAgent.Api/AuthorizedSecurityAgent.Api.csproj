@@ -3,8 +3,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>AuthorizedSecurityAgent</RootNamespace>
     <AssemblyName>AuthorizedSecurityAgent.Api</AssemblyName>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 </Project>
-

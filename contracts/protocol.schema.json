@@ -226,6 +226,135 @@
         }
       }
     },
+    "scanRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "targetUrl",
+        "authorizedOrigin",
+        "authorizationConfirmed"
+      ],
+      "properties": {
+        "contractVersion": {
+          "$ref": "#/$defs/contractVersion"
+        },
+        "targetUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "authorizedOrigin": {
+          "type": "string",
+          "format": "uri"
+        },
+        "authorizationConfirmed": {
+          "type": "boolean",
+          "const": true
+        }
+      }
+    },
+    "scanSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totalChecks",
+        "totalFindings",
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "informational"
+      ],
+      "properties": {
+        "totalChecks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "totalFindings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "critical": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "high": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "medium": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "low": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "informational": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "scanReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "scanId",
+        "targetUrl",
+        "startedAt",
+        "completedAt",
+        "summary",
+        "checksPerformed",
+        "findings",
+        "scopeNote"
+      ],
+      "properties": {
+        "contractVersion": {
+          "$ref": "#/$defs/contractVersion"
+        },
+        "scanId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "targetUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "summary": {
+          "$ref": "#/$defs/scanSummary"
+        },
+        "checksPerformed": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "uniqueItems": true
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "scopeNote": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
     "errorResponse": {
       "type": "object",
       "additionalProperties": false,

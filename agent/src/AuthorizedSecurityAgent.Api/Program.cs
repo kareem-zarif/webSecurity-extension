@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using AuthorizedSecurityAgent.Api;
 using AuthorizedSecurityAgent.Application.Contracts;
+using AuthorizedSecurityAgent.Application.Scanning;
 using AuthorizedSecurityAgent.Infrastructure.Errors;
 using AuthorizedSecurityAgent.Infrastructure.Logging;
 using AuthorizedSecurityAgent.Infrastructure.Middleware;
@@ -41,6 +42,17 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
+builder.Services
+    .AddHttpClient<AuthorizedScanService>(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(20);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("AuthorizedSecurityAssessment/0.2");
+    })
+    .ConfigurePrimaryHttpMessageHandler(static () => new HttpClientHandler
+    {
+        AllowAutoRedirect = false,
+        UseCookies = false
+    });
 
 builder.Services.AddCors(options =>
 {
@@ -48,7 +60,7 @@ builder.Services.AddCors(options =>
     {
         policy
             .WithOrigins(agentSettings.AllowedDevelopmentOrigins)
-            .WithMethods(HttpMethods.Get)
+            .WithMethods(HttpMethods.Get, HttpMethods.Post)
             .WithHeaders("Accept", "Content-Type");
     });
 });
@@ -78,7 +90,7 @@ app.UseStatusCodePages(async statusCodeContext =>
 app.MapGet("/health", (HttpContext context) =>
     {
         context.Response.Headers.CacheControl = "no-store";
-        var assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.1.0";
+        var assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.2.0";
 
         return TypedResults.Ok(new AgentHealthResponse(
             Status: "healthy",
@@ -88,6 +100,51 @@ app.MapGet("/health", (HttpContext context) =>
     })
     .WithName("AgentHealth")
     .WithDisplayName("Agent health check");
+
+app.MapPost("/api/scans", async (
+        ScanRequest request,
+        AuthorizedScanService scanner,
+        HttpContext context,
+        CancellationToken cancellationToken) =>
+    {
+        context.Response.Headers.CacheControl = "no-store";
+
+        try
+        {
+            var report = await scanner.TryScanAsync(request, cancellationToken);
+            return report is null
+                ? Results.Json(
+                    new ErrorResponse(
+                        ErrorCode: ErrorCodes.ForStatus(StatusCodes.Status429TooManyRequests),
+                        Message: "Another assessment is already running.",
+                        TraceId: context.TraceIdentifier),
+                    statusCode: StatusCodes.Status429TooManyRequests)
+                : Results.Ok(report);
+        }
+        catch (ScanValidationException exception)
+        {
+            return Results.BadRequest(new ErrorResponse(
+                ErrorCode: ErrorCodes.ForStatus(StatusCodes.Status400BadRequest),
+                Message: exception.Message,
+                TraceId: context.TraceIdentifier));
+        }
+        catch (HttpRequestException)
+        {
+            return Results.BadRequest(new ErrorResponse(
+                ErrorCode: "target-unreachable",
+                Message: "The authorized target could not be reached safely.",
+                TraceId: context.TraceIdentifier));
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.BadRequest(new ErrorResponse(
+                ErrorCode: "target-timeout",
+                Message: "The authorized target did not respond before the assessment timeout.",
+                TraceId: context.TraceIdentifier));
+        }
+    })
+    .WithName("StartAuthorizedScan")
+    .WithDisplayName("Run authorized non-destructive assessment");
 
 app.Logger.LogInformation(
     "Authorized Security Agent configured on loopback port {Port} in {EnvironmentName}",
@@ -100,4 +157,3 @@ namespace AuthorizedSecurityAgent.Api
 {
     public partial class Program;
 }
-

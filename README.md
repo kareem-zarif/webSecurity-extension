@@ -1,6 +1,6 @@
 # Authorized Web Security Assessment Extension
 
-This repository contains a local-first browser extension and security agent for authorized defensive web assessment. The MVP is implemented one SFD story at a time. The current implementation covers **SEC-001 — Initialize the solution**.
+This repository contains a local-first browser extension and security agent for authorized defensive web assessment. The current MVP provides an explicit authorization workflow, a bounded unauthenticated website assessment, severity-ranked findings, remediation guidance, and JSON/HTML report export.
 
 ## Safety boundary
 
@@ -42,7 +42,7 @@ npm install
 npm run dev
 ```
 
-Open the Vite URL to preview the popup. It automatically checks the local agent and exposes loading, available, and unavailable states.
+Open the Vite URL to preview the popup. It checks the local agent, but current-tab detection requires the built browser extension.
 
 To load the actual extension:
 
@@ -52,6 +52,16 @@ npm run build
 ```
 
 Then open the browser's extensions page, enable developer mode, choose **Load unpacked**, and select `extension/dist`. Start the local agent before using **Check again** in the popup.
+
+## Run an authorized assessment
+
+1. Open the website you own or have explicit written permission to assess.
+2. Open the extension and confirm the exact origin shown in the target field.
+3. Confirm authorization, then choose **Run authorized assessment**.
+4. Expand each finding to review its evidence, impact, and recommended remediation.
+5. Export JSON for structured processing or **Client report** for a standalone HTML report.
+
+The scanner sends one unauthenticated GET request and follows only same-origin redirects. It checks HTTPS/HSTS, CSP, framing, MIME sniffing, referrer and permissions policies, cookie attributes, CORS, technology disclosure, mixed content, insecure forms, and external-script integrity. It does not use browser credentials or cookies and does not perform payload exploitation, brute force, credential attacks, persistence, stealth, or denial-of-service testing. Automated findings require manual validation.
 
 ## Configuration
 
@@ -65,15 +75,14 @@ The agent writes one JSON object per log event. Sensitive property names and rec
 
 ## Shared contracts
 
-`contracts/protocol.schema.json` is the language-neutral wire-contract reference. Equivalent TypeScript and C# records are kept in each application so neither runtime requires generated code during SEC-001. Contract version `1.0` is sent in envelopes and error responses. Later contract changes must remain backward-compatible or introduce a new explicit version.
+`contracts/protocol.schema.json` is the language-neutral wire-contract reference. Equivalent TypeScript and C# records are kept in each application so neither runtime requires generated code. Contract version `1.0` is sent in commands, scan reports, findings, and error responses. Later contract changes must remain backward-compatible or introduce a new explicit version.
 
 ## Validation
 
-SEC-001 can be validated without automated test files, as required by the SFD:
+The current implementation can be validated with:
 
 ```powershell
 npm --prefix extension run typecheck
 npm --prefix extension run build
 dotnet build agent/AuthorizedSecurityAgent.sln
 ```
-
